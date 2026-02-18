@@ -1,0 +1,41 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'EventBridge rule to trigger Lambda Patch Commander'
+
+Resources:
+  #####################################
+  # EventBridge Rule
+  #####################################
+  PatchManagerEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: ShogiEC2WeeklyPatchSchedule
+      Description: Weekly trigger for EC2 Patch Manager Lambda
+      ScheduleExpression: 'cron(0 5 ? * SUN *)' # Sunday 05:00 UTC = 14:00 JST
+      State: ENABLED
+      Targets:
+        - Id: PatchCommanderLambda
+          Arn: !ImportValue LambdaPatchFunctionArn
+
+  #####################################
+  # Permission for EventBridge → Lambda
+  #####################################
+  AllowEventBridgeInvokeLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !ImportValue LambdaPatchFunctionArn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt PatchManagerEventRule.Arn
+
+Outputs:
+  EventRuleArn:
+    Description: EventBridge Rule ARN
+    Value: !GetAtt PatchManagerEventRule.Arn
+    Export:
+      Name: PatchManagerEventRuleArn
+
+  EventRuleName:
+    Description: EventBridge Rule Name
+    Value: !Ref PatchManagerEventRule
+    Export:
+      Name: PatchManagerEventRuleName

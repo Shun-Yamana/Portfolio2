@@ -1,0 +1,206 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'DynamoDB StudyRecords Table with TTL, PITR, Full Auto Scaling, Retain Policy and Tags'
+
+Resources:
+  # =========================
+  # DynamoDB Table
+  # =========================
+  StudyRecordsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: StudyRecords
+      BillingMode: PROVISIONED
+      TableClass: STANDARD
+
+      ProvisionedThroughput:
+        ReadCapacityUnits: 1
+        WriteCapacityUnits: 1
+
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+      AttributeDefinitions:
+        - AttributeName: date
+          AttributeType: S
+        - AttributeName: record_id
+          AttributeType: S
+        - AttributeName: subject
+          AttributeType: S
+
+      KeySchema:
+        - AttributeName: date
+          KeyType: HASH
+        - AttributeName: record_id
+          KeyType: RANGE
+
+      GlobalSecondaryIndexes:
+        - IndexName: SubjectDateIndex
+          KeySchema:
+            - AttributeName: subject
+              KeyType: HASH
+            - AttributeName: date
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+          ProvisionedThroughput:
+            ReadCapacityUnits: 1
+            WriteCapacityUnits: 1
+
+      Tags:
+        - Key: Project
+          Value: StudyApp
+        - Key: Environment
+          Value: Personal
+
+  # =========================
+  # IAM Role for Auto Scaling
+  # =========================
+  DynamoDBAutoScalingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: application-autoscaling.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: DynamoDBAutoScalingPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:DescribeTable
+                  - dynamodb:UpdateTable
+                  - cloudwatch:PutMetricAlarm
+                  - cloudwatch:DescribeAlarms
+                  - cloudwatch:GetMetricStatistics
+                  - cloudwatch:SetAlarmState
+                  - cloudwatch:DeleteAlarms
+                Resource: '*'
+
+  # =========================
+  # Table Write Auto Scaling
+  # =========================
+  TableWriteScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MinCapacity: 1
+      MaxCapacity: 5
+      ResourceId: !Sub table/${StudyRecordsTable}
+      RoleARN: !GetAtt DynamoDBAutoScalingRole.Arn
+      ScalableDimension: dynamodb:table:WriteCapacityUnits
+      ServiceNamespace: dynamodb
+
+  TableWriteScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: StudyRecordsTableWriteScaling
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref TableWriteScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70.0
+        ScaleOutCooldown: 300
+        ScaleInCooldown: 300
+        DisableScaleIn: false
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBWriteCapacityUtilization
+
+  # =========================
+  # Table Read Auto Scaling
+  # =========================
+  TableReadScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MinCapacity: 1
+      MaxCapacity: 5
+      ResourceId: !Sub table/${StudyRecordsTable}
+      RoleARN: !GetAtt DynamoDBAutoScalingRole.Arn
+      ScalableDimension: dynamodb:table:ReadCapacityUnits
+      ServiceNamespace: dynamodb
+
+  TableReadScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: StudyRecordsTableReadScaling
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref TableReadScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70.0
+        ScaleOutCooldown: 300
+        ScaleInCooldown: 300
+        DisableScaleIn: false
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBReadCapacityUtilization
+
+  # =========================
+  # GSI Write Auto Scaling
+  # =========================
+  GSIWriteScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MinCapacity: 1
+      MaxCapacity: 5
+      ResourceId: !Sub table/${StudyRecordsTable}/index/SubjectDateIndex
+      RoleARN: !GetAtt DynamoDBAutoScalingRole.Arn
+      ScalableDimension: dynamodb:index:WriteCapacityUnits
+      ServiceNamespace: dynamodb
+
+  GSIWriteScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: SubjectDateIndexWriteScaling
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref GSIWriteScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70.0
+        ScaleOutCooldown: 300
+        ScaleInCooldown: 300
+        DisableScaleIn: false
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBWriteCapacityUtilization
+
+  # =========================
+  # GSI Read Auto Scaling
+  # =========================
+  GSIReadScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MinCapacity: 1
+      MaxCapacity: 5
+      ResourceId: !Sub table/${StudyRecordsTable}/index/SubjectDateIndex
+      RoleARN: !GetAtt DynamoDBAutoScalingRole.Arn
+      ScalableDimension: dynamodb:index:ReadCapacityUnits
+      ServiceNamespace: dynamodb
+
+  GSIReadScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: SubjectDateIndexReadScaling
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref GSIReadScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70.0
+        ScaleOutCooldown: 300
+        ScaleInCooldown: 300
+        DisableScaleIn: false
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBReadCapacityUtilization
+
+Outputs:
+  TableName:
+    Description: DynamoDB Table Name
+    Value: !Ref StudyRecordsTable
+
+  TableArn:
+    Description: DynamoDB Table ARN
+    Value: !GetAtt StudyRecordsTable.Arn
+

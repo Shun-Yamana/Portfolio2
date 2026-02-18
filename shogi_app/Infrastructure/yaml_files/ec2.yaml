@@ -1,0 +1,129 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Private EC2 with SSM Patch Manager and DLM Snapshot Policy (Shogi Application)'
+
+Parameters:
+  KeyPairName:
+    Type: String
+    Description: EC2 KeyPair for emergency access (normally unused with SSM)
+    NoEcho: true
+
+Resources:
+  # -----------------------------
+  # SSM Patch Baseline
+  # -----------------------------
+  PatchBaseline:
+    Type: AWS::SSM::PatchBaseline
+    Properties:
+      Name: ShogiEC2PatchBaseline
+      Description: Patch baseline for shogi EC2 instances
+      OperatingSystem: AMAZON_LINUX_2
+      PatchGroups:
+        - ShogiEC2PatchGroup
+      ApprovalRules:
+        PatchRules:
+          - PatchFilterGroup:
+              PatchFilters:
+                - Key: CLASSIFICATION
+                  Values:
+                    - Security
+                    - Bugfix
+                - Key: SEVERITY
+                  Values:
+                    - Critical
+                    - Important
+            ComplianceLevel: HIGH
+            ApproveAfterDays: 7
+            EnableNonSecurity: false
+      RejectedPatches:
+        - '*kernel*'
+      RejectedPatchesAction: BLOCK
+
+
+  # -----------------------------
+  # EC2 Instance (Private)
+  # -----------------------------
+  ShogiEC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Sub '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2}}'
+      InstanceType: t3.micro
+      KeyName: !Ref KeyPairName
+      SubnetId: !ImportValue ShogiSubnetId
+      SecurityGroupIds:
+        - !ImportValue ShogiSecurityGroupId
+      IamInstanceProfile: !ImportValue EC2InstanceProfileName
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 30
+            VolumeType: gp3
+            Encrypted: true
+            DeleteOnTermination: true
+      Tags:
+        - Key: Name
+          Value: ShogiApplication
+        - Key: Environment
+          Value: Shogi
+        - Key: Backup
+          Value: Daily
+        - Key: PatchGroup
+          Value: ShogiEC2PatchGroup
+
+  # -----------------------------
+  # DLM Snapshot Policy
+  # -----------------------------
+  DLMSnapshotPolicy:
+    Type: AWS::DLM::LifecyclePolicy
+    Properties:
+      Description: Daily snapshot policy for shogi EC2 instance
+      ExecutionRoleArn: !ImportValue DLMServiceRoleArn
+      State: ENABLED
+      PolicyDetails:
+        PolicyType: EBS_SNAPSHOT_MANAGEMENT
+        ResourceTypes:
+          - VOLUME
+        TargetTags:
+          - Key: Backup
+            Value: Daily
+        Schedules:
+          - Name: DailySnapshotAt03JST
+            CreateRule:
+              Interval: 24
+              IntervalUnit: HOURS
+              Times:
+                - '18:00'   # 03:00 JST
+            RetainRule:
+              Count: 7
+            CopyTags: true
+      Tags:
+        - Key: Name
+          Value: ShogiEC2DailySnapshot
+
+Outputs:
+  InstanceId:
+    Description: EC2 Instance ID
+    Value: !Ref ShogiEC2Instance
+    Export:
+      Name: ShogiEC2InstanceId
+
+  InstancePrivateIP:
+    Description: Private IP Address of EC2 Instance
+    Value: !GetAtt ShogiEC2Instance.PrivateIp
+    Export:
+      Name: ShogiEC2PrivateIP
+
+  PatchBaselineId:
+    Description: SSM Patch Baseline ID
+    Value: !Ref PatchBaseline
+    Export:
+      Name: ShogiPatchBaselineId
+
+  DLMPolicyId:
+    Description: DLM Snapshot Policy ID
+    Value: !Ref DLMSnapshotPolicy
+    Export:
+      Name: ShogiDLMPolicyId
+
+  VolumeEncryption:
+    Description: Root volume encryption
+    Value: 'Enabled (gp3, 30 GiB)'

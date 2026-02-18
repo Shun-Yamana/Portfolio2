@@ -1,0 +1,207 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: IAM roles for Lambda Patch, Lambda EIP, and EC2 SSM Managed Instance
+
+Resources:
+
+  ########################################
+  # Lambda Role for Patch Manager
+  ########################################
+  LambdaPatchRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: Lambda-PatchManager-Role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaPatchPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:SendCommand
+                  - ssm:ListCommands
+                  - ssm:ListCommandInvocations
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                  - ec2:DescribeTags
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource: "*"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  ########################################
+  # Lambda Role for Patch Commander (On-Demand)
+  ########################################
+  PatchCommanderLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: PatchCommanderLambdaRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: PatchCommanderPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ssm:SendCommand
+                  - ssm:ListCommands
+                  - ssm:ListCommandInvocations
+                Resource: '*'
+
+  ########################################
+  # Lambda Role for Elastic IP Switching
+  ########################################
+  LambdaEIPRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: Lambda-EIP-Switch-Role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaEIPPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                  - ec2:DescribeAddresses
+                  - ec2:AssociateAddress
+                  - ec2:DisassociateAddress
+                Resource: "*"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  ########################################
+  # EC2 Role for SSM Managed Instance
+  ########################################
+  EC2SSMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: EC2-SSM-ManagedRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: S3AndDynamoDBAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::shogi-app-packages-${AWS::AccountId}"
+                  - !Sub "arn:aws:s3:::shogi-app-packages-${AWS::AccountId}/*"
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource:
+                  - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/ShogiRecords"
+                  - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/ShogiRecords/index/*"
+
+  EC2SSMInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: EC2-SSM-InstanceProfile
+      Roles:
+        - !Ref EC2SSMRole
+
+  ########################################
+  # DLM Service Role for EC2 Snapshots
+  ########################################
+  DLMServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: DLM-EC2-Snapshot-Role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: dlm.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole
+
+########################################
+# Outputs
+########################################
+Outputs:
+
+  LambdaPatchRoleArn:
+    Description: ARN of Lambda role for Patch Manager execution
+    Value: !GetAtt LambdaPatchRole.Arn
+    Export:
+      Name: LambdaPatchRoleArn
+
+  PatchCommanderRoleArn:
+    Description: ARN of Lambda role for Patch Commander (On-Demand)
+    Value: !GetAtt PatchCommanderLambdaRole.Arn
+    Export:
+      Name: PatchCommanderRoleArn
+
+  LambdaEIPRoleArn:
+    Description: ARN of Lambda role for Elastic IP switching
+    Value: !GetAtt LambdaEIPRole.Arn
+    Export:
+      Name: LambdaEIPRoleArn
+
+  EC2SSMRoleArn:
+    Description: ARN of EC2 role for SSM managed instance
+    Value: !GetAtt EC2SSMRole.Arn
+    Export:
+      Name: EC2SSMRoleArn
+
+  EC2InstanceProfileName:
+    Description: Instance profile name to attach to EC2
+    Value: !Ref EC2SSMInstanceProfile
+    Export:
+      Name: EC2InstanceProfileName
+
+  DLMServiceRoleArn:
+    Description: ARN of DLM service role for EC2 snapshots
+    Value: !GetAtt DLMServiceRole.Arn
+    Export:
+      Name: DLMServiceRoleArn

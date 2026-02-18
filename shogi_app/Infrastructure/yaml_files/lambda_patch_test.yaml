@@ -1,0 +1,95 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Lambda Commander for SSM Patch Manager SCAN (Testing)
+
+Parameters:
+  PatchGroupName:
+    Type: String
+    Default: ShogiEC2PatchGroup
+    Description: Target PatchGroup tag value
+
+Resources:
+  #####################################
+  # Lambda Function (Scan Only)
+  #####################################
+  PatchCommanderScanLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: PatchCommanderScan
+      Runtime: python3.12
+      Handler: index.lambda_handler
+      Timeout: 300
+      Role: !ImportValue PatchCommanderRoleArn
+      Environment:
+        Variables:
+          PATCH_GROUP: !Ref PatchGroupName
+      Code:
+        ZipFile: |
+          import boto3
+          import os
+
+          ec2 = boto3.client('ec2')
+          ssm = boto3.client('ssm')
+
+          def lambda_handler(event, context):
+              patch_group = os.environ['PATCH_GROUP']
+
+              # Discover target EC2 instances
+              response = ec2.describe_instances(
+                  Filters=[
+                      {
+                          'Name': 'tag:PatchGroup',
+                          'Values': [patch_group]
+                      },
+                      {
+                          'Name': 'instance-state-name',
+                          'Values': ['running']
+                      }
+                  ]
+              )
+
+              instance_ids = []
+              for reservation in response['Reservations']:
+                  for instance in reservation['Instances']:
+                      instance_ids.append(instance['InstanceId'])
+
+              if not instance_ids:
+                  return {
+                      'status': 'NO_TARGET',
+                      'message': 'No running instances found for PatchGroup'
+                  }
+
+              # Execute Patch Scan (No Install, No Reboot)
+              command = ssm.send_command(
+                  InstanceIds=instance_ids,
+                  DocumentName='AWS-RunPatchBaseline',
+                  Parameters={
+                      'Operation': ['Scan']
+                  }
+              )
+
+              return {
+                  'status': 'SCAN_EXECUTED',
+                  'command_id': command['Command']['CommandId'],
+                  'target_instances': instance_ids
+              }
+
+  #####################################
+  # CloudWatch Logs
+  #####################################
+  PatchCommanderScanLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/PatchCommanderScan
+      RetentionInDays: 14
+
+Outputs:
+  ScanLambdaFunctionName:
+    Description: Lambda function name for Patch Scan
+    Value: !Ref PatchCommanderScanLambda
+
+  ScanLambdaFunctionArn:
+    Description: Lambda function ARN
+    Value: !GetAtt PatchCommanderScanLambda.Arn
+    Export:
+      Name: PatchCommanderScanLambdaArn

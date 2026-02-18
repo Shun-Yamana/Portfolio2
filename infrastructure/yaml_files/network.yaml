@@ -1,0 +1,227 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Network Resources for Study Application'
+
+Resources:
+  # VPC Configuration
+  StudyVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: StudyVPC
+
+  StudySubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref StudyVPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: StudySubnet
+
+  # Internet Gateway
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: StudyIGW
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref StudyVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # Public Subnet for NAT Gateway
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref StudyVPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: PublicSubnet
+
+  # Elastic IP for NAT Gateway
+  NATGatewayEIP:
+    Type: AWS::EC2::EIP
+    DependsOn: AttachGateway
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: NATGatewayEIP
+
+  # NAT Gateway
+  NATGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NATGatewayEIP.AllocationId
+      SubnetId: !Ref PublicSubnet
+      Tags:
+        - Key: Name
+          Value: StudyNATGateway
+
+  # Public Route Table
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref StudyVPC
+      Tags:
+        - Key: Name
+          Value: PublicRouteTable
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  # Private Route Table
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref StudyVPC
+      Tags:
+        - Key: Name
+          Value: PrivateRouteTable
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NATGateway
+
+  PrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref StudySubnet
+      RouteTableId: !Ref PrivateRouteTable
+
+  # Security Group for EC2
+  StudySecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: StudySecurityGroup
+      GroupDescription: Security group for study EC2 instance via SSM endpoints
+      VpcId: !Ref StudyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 10.0.0.0/16
+          Description: HTTPS for SSM from VPC
+      Tags:
+        - Key: Name
+          Value: StudySecurityGroup
+
+  # Security Group for VPC Endpoints
+  VPCEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: VPCEndpointSecurityGroup
+      GroupDescription: Security group for VPC endpoints
+      VpcId: !Ref StudyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 10.0.0.0/16
+          Description: HTTPS from VPC
+      Tags:
+        - Key: Name
+          Value: VPCEndpointSecurityGroup
+
+  # SSM VPC Endpoint
+  SSMEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref StudyVPC
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ssm'
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref StudySubnet
+      SecurityGroupIds:
+        - !Ref VPCEndpointSecurityGroup
+      Tags:
+        - Key: Name
+          Value: SSMEndpoint
+
+  # SSM Messages VPC Endpoint
+  SSMMessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref StudyVPC
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ssmmessages'
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref StudySubnet
+      SecurityGroupIds:
+        - !Ref VPCEndpointSecurityGroup
+      Tags:
+        - Key: Name
+          Value: SSMMessagesEndpoint
+
+  # EC2 Messages VPC Endpoint
+  EC2MessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref StudyVPC
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ec2messages'
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref StudySubnet
+      SecurityGroupIds:
+        - !Ref VPCEndpointSecurityGroup
+      Tags:
+        - Key: Name
+          Value: EC2MessagesEndpoint
+
+  # S3 Gateway Endpoint
+  S3Endpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref StudyVPC
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      VpcEndpointType: Gateway
+      RouteTableIds:
+        - !Ref PrivateRouteTable
+
+Outputs:
+  VPCId:
+    Description: VPC ID
+    Value: !Ref StudyVPC
+    Export:
+      Name: StudyVPCId
+
+  SubnetId:
+    Description: Subnet ID
+    Value: !Ref StudySubnet
+    Export:
+      Name: StudySubnetId
+
+  SecurityGroupId:
+    Description: Security Group ID
+    Value: !Ref StudySecurityGroup
+    Export:
+      Name: StudySecurityGroupId

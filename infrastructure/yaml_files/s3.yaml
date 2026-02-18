@@ -1,0 +1,37 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'S3 Bucket for Python Packages'
+
+Resources:
+  PythonPackagesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'study-app-packages-${AWS::AccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags:
+        - Key: Project
+          Value: StudyApp
+        - Key: Purpose
+          Value: PythonPackages
+
+Outputs:
+  BucketName:
+    Description: S3 Bucket Name
+    Value: !Ref PythonPackagesBucket
+    Export:
+      Name: StudyAppPackagesBucketName
+
+  BucketArn:
+    Description: S3 Bucket ARN
+    Value: !GetAtt PythonPackagesBucket.Arn
+    Export:
+      Name: StudyAppPackagesBucketArn

@@ -17,38 +17,36 @@ from .game_helpers import (
     build_check_status,
     build_checkmate_status,
     build_game_status,
-    create_initial_board,
     expand_legal_moves,
-    is_board_payload,
     is_uchifuzume_allowed,
     parse_position,
     switch_side,
-    sync_board,
     validate_drop_constraints,
+)
+
+from .state import (
+    get_current_state,
+    set_current_state,
+    snapshot_previous_state,
+    get_previous_state,
+    clear_previous_state,   
+    increment_version,
+    get_version,
+    reset_state,
 )
 
 app = Flask(__name__)
 
-# 対局全体の状態を保持する。
-board: Board = create_initial_board()
-side_to_move: str = "upper"
-hands = {"upper": [], "lower": []}
-
-
 # 状態を初期化する。
 def _reset_game_state() -> None:
-    global board, side_to_move, hands
-    board = create_initial_board()
-    side_to_move = "upper"
-    hands = {"upper": [], "lower": []}
+    reset_state()
 
 
-# 共通の状態ペイロードを返す。
-def _state_payload(current_board: Board):
-    check_status = build_check_status(current_board)
-    checkmate_status = build_checkmate_status(current_board, hands)
+def _build_state_payload(board: Board, side_to_move: str, hands: dict):
+    check_status = build_check_status(board)
+    checkmate_status = build_checkmate_status(board, hands)
     return {
-        "board": current_board,
+        "board": board,
         "side_to_move": side_to_move,
         "hands": hands,
         "check_status": check_status,
@@ -56,32 +54,48 @@ def _state_payload(current_board: Board):
         "game_status": build_game_status(checkmate_status),
     }
 
+# 共通の状態ペイロードを返す。
+def _state_payload(current_state: dict):
+    return {
+        "board": current_state["board"],
+        "side_to_move": current_state["side_to_move"],
+        "hands": current_state["hands"],
+        "check_status": current_state["check_status"],
+        "checkmate_status": current_state["checkmate_status"],
+        "game_status": current_state["game_status"],
+    }
 
 @app.route("/api/board", methods=["GET"])
 def get_board():
-    return jsonify(board)
+    return jsonify(get_current_state()["board"])
 
 
 @app.route("/api/state", methods=["GET"])
 def get_state():
-    return jsonify(_state_payload(board))
+    state = get_current_state()
+    return jsonify({
+        "success": True,
+        **_state_payload(state),
+        "version": get_version(),
+    })
 
 
 @app.route("/api/reset", methods=["POST"])
 def reset_game():
     _reset_game_state()
-    return jsonify({"success": True, **_state_payload(board)})
+    state = get_current_state()
+    return jsonify({"success": True, **_state_payload(state), "version": get_version()})
 
 
 @app.route("/api/legal_moves", methods=["POST"])
 def legal_moves():
+    state = get_current_state()
     data = request.get_json(silent=True) or {}
-    req_board = data.get("board")
     row = data.get("row")
     col = data.get("col")
     piece = data.get("piece")
 
-    target_board = req_board if is_board_payload(req_board) else board
+    target_board = state["board"]
 
     if row is None or col is None or piece is None:
         return jsonify({
@@ -102,9 +116,9 @@ def legal_moves():
             "error": "Piece mismatch at selected position."
         }), 400
 
-    if side_to_move == "upper" and not moving_piece.isupper():
+    if state["side_to_move"] == "upper" and not moving_piece.isupper():
         return jsonify({"legal_moves": []})
-    if side_to_move == "lower" and not moving_piece.islower():
+    if state["side_to_move"] == "lower" and not moving_piece.islower():
         return jsonify({"legal_moves": []})
 
     raw_moves = generate_legal_moves(target_board, (row, col), piece)
@@ -113,7 +127,11 @@ def legal_moves():
 
 @app.route("/api/move", methods=["POST"])
 def move():
-    global side_to_move
+    state = get_current_state()
+    board = state["board"]
+    side_to_move = state["side_to_move"]
+    hands = copy.deepcopy(state["hands"])
+
     current_checkmate = build_checkmate_status(board, hands)
     current_game_status = build_game_status(current_checkmate)
     if current_game_status["state"] == "ended":
@@ -132,8 +150,7 @@ def move():
     drop_piece = data.get("drop_piece")
     move_type = data.get("move_type")
     promote = bool(data.get("promote", False))
-    req_board = data.get("board")
-    target_board = req_board if is_board_payload(req_board) else board
+    target_board = board
 
     if to_pos[0] is None or to_pos[1] is None or move_type not in ("move", "capture", "drop"):
         return jsonify({
@@ -179,9 +196,18 @@ def move():
             }), 400
 
         hands[side_to_move].remove(hand_piece)
-        sync_board(board, new_board)
-        side_to_move = switch_side(side_to_move)
-        return jsonify({"success": True, "captured_piece": None, "promoted": False, **_state_payload(new_board)})
+        new_side = switch_side(side_to_move)
+        new_state = _build_state_payload(new_board, new_side, hands)
+        snapshot_previous_state()
+        set_current_state(new_state)
+        increment_version()
+        return jsonify({
+            "success": True,
+            "captured_piece": None,
+            "promoted": False,
+            **_state_payload(new_state),
+            "version": get_version(),
+        })
 
     if (
         from_pos[0] is None
@@ -268,15 +294,28 @@ def move():
     if captured_piece is not None:
         add_captured_to_hands(hands, captured_piece, side_to_move)
 
-    sync_board(board, new_board)
-    side_to_move = switch_side(side_to_move)
+    new_side = switch_side(side_to_move)
+    new_state = _build_state_payload(new_board, new_side, hands)
+    snapshot_previous_state()
+    set_current_state(new_state)
+    increment_version()
     return jsonify({
         "success": True,
         "captured_piece": captured_piece if move_type == "capture" else None,
         "promoted": promote,
-        **_state_payload(new_board),
+        **_state_payload(new_state),
+        "version": get_version(),
     })
 
+@app.route("/api/undo", methods=["POST"])
+def undo_move():  
+    prev = get_previous_state()  
+    if prev is None:
+        return jsonify({"success": False, "message": "No move to undo."}), 400
+    set_current_state(prev)
+    clear_previous_state()
+    increment_version()
+    return jsonify({"success": True, **_state_payload(get_current_state()), "version": get_version()})
 
 if __name__ == "__main__":
     app.run(debug=True)

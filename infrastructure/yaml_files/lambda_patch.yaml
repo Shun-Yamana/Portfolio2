@@ -5,7 +5,7 @@ Description: >
 Parameters:
   PatchGroupName:
     Type: String
-    Default: StudyEC2PatchGroup
+    Default: ShogiEC2PatchGroup
     Description: Target PatchGroup tag value
 
 Resources:

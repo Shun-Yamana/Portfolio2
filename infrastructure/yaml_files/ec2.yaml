@@ -1,10 +1,11 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Private EC2 with SSM Patch Manager and DLM Snapshot Policy (Study Application)'
+Description: 'Private EC2 with SSM Patch Manager and DLM Snapshot Policy (Shogi Application)'
 
 Parameters:
   KeyPairName:
     Type: String
     Description: EC2 KeyPair for emergency access (normally unused with SSM)
+    Default: ''
     NoEcho: true
 
 Resources:
@@ -14,11 +15,11 @@ Resources:
   PatchBaseline:
     Type: AWS::SSM::PatchBaseline
     Properties:
-      Name: StudyEC2PatchBaseline
-      Description: Patch baseline for study EC2 instances
+      Name: ShogiEC2PatchBaseline
+      Description: Patch baseline for shogi EC2 instances
       OperatingSystem: AMAZON_LINUX_2
       PatchGroups:
-        - StudyEC2PatchGroup
+        - ShogiEC2PatchGroup
       ApprovalRules:
         PatchRules:
           - PatchFilterGroup:
@@ -42,15 +43,14 @@ Resources:
   # -----------------------------
   # EC2 Instance (Private)
   # -----------------------------
-  StudyEC2Instance:
+  ShogiEC2Instance:
     Type: AWS::EC2::Instance
     Properties:
       ImageId: !Sub '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2}}'
       InstanceType: t3.micro
-      KeyName: !Ref KeyPairName
-      SubnetId: !ImportValue StudySubnetId
+      SubnetId: !ImportValue ShogiSubnetId
       SecurityGroupIds:
-        - !ImportValue StudySecurityGroupId
+        - !ImportValue ShogiSecurityGroupId
       IamInstanceProfile: !ImportValue EC2InstanceProfileName
       BlockDeviceMappings:
         - DeviceName: /dev/xvda
@@ -61,13 +61,13 @@ Resources:
             DeleteOnTermination: true
       Tags:
         - Key: Name
-          Value: StudyApplication
+          Value: ShogiApplication
         - Key: Environment
-          Value: Study
+          Value: Shogi
         - Key: Backup
           Value: Daily
         - Key: PatchGroup
-          Value: StudyEC2PatchGroup
+          Value: ShogiEC2PatchGroup
 
   # -----------------------------
   # DLM Snapshot Policy
@@ -75,7 +75,7 @@ Resources:
   DLMSnapshotPolicy:
     Type: AWS::DLM::LifecyclePolicy
     Properties:
-      Description: Daily snapshot policy for study EC2 instance
+      Description: Daily snapshot policy for shogi EC2 instance
       ExecutionRoleArn: !ImportValue DLMServiceRoleArn
       State: ENABLED
       PolicyDetails:
@@ -97,32 +97,32 @@ Resources:
             CopyTags: true
       Tags:
         - Key: Name
-          Value: StudyEC2DailySnapshot
+          Value: ShogiEC2DailySnapshot
 
 Outputs:
   InstanceId:
     Description: EC2 Instance ID
-    Value: !Ref StudyEC2Instance
+    Value: !Ref ShogiEC2Instance
     Export:
-      Name: StudyEC2InstanceId
+      Name: ShogiEC2InstanceId
 
   InstancePrivateIP:
     Description: Private IP Address of EC2 Instance
-    Value: !GetAtt StudyEC2Instance.PrivateIp
+    Value: !GetAtt ShogiEC2Instance.PrivateIp
     Export:
-      Name: StudyEC2PrivateIP
+      Name: ShogiEC2PrivateIP
 
   PatchBaselineId:
     Description: SSM Patch Baseline ID
     Value: !Ref PatchBaseline
     Export:
-      Name: StudyPatchBaselineId
+      Name: ShogiPatchBaselineId
 
   DLMPolicyId:
     Description: DLM Snapshot Policy ID
     Value: !Ref DLMSnapshotPolicy
     Export:
-      Name: StudyDLMPolicyId
+      Name: ShogiDLMPolicyId
 
   VolumeEncryption:
     Description: Root volume encryption

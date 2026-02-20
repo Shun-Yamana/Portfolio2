@@ -4,44 +4,7 @@ Description: IAM roles for Lambda Patch, Lambda EIP, and EC2 SSM Managed Instanc
 Resources:
 
   ########################################
-  # Lambda Role for Patch Manager
-  ########################################
-  LambdaPatchRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: Lambda-PatchManager-Role
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: LambdaPatchPolicy
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action:
-                  - ssm:SendCommand
-                  - ssm:ListCommands
-                  - ssm:ListCommandInvocations
-                Resource: "*"
-              - Effect: Allow
-                Action:
-                  - ec2:DescribeInstances
-                  - ec2:DescribeTags
-                Resource: "*"
-              - Effect: Allow
-                Action:
-                  - iam:PassRole
-                Resource: "*"
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-
-  ########################################
-  # Lambda Role for Patch Commander (On-Demand)
+  # Lambda Role for Patch Commander
   ########################################
   PatchCommanderLambdaRole:
     Type: AWS::IAM::Role
@@ -97,6 +60,8 @@ Resources:
                   - ec2:DescribeAddresses
                   - ec2:AssociateAddress
                   - ec2:DisassociateAddress
+                  - ec2:StartInstances
+                  - ec2:StopInstances
                 Resource: "*"
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
@@ -127,8 +92,8 @@ Resources:
                   - s3:GetObject
                   - s3:ListBucket
                 Resource:
-                  - !Sub "arn:aws:s3:::study-app-packages-${AWS::AccountId}"
-                  - !Sub "arn:aws:s3:::study-app-packages-${AWS::AccountId}/*"
+                  - !Sub "arn:aws:s3:::shogi-app-packages-${AWS::AccountId}"
+                  - !Sub "arn:aws:s3:::shogi-app-packages-${AWS::AccountId}/*"
               - Effect: Allow
                 Action:
                   - dynamodb:PutItem
@@ -138,8 +103,7 @@ Resources:
                   - dynamodb:Query
                   - dynamodb:Scan
                 Resource:
-                  - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/StudyRecords"
-                  - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/StudyRecords/index/*"
+                  - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/ShogiGames"
 
   EC2SSMInstanceProfile:
     Type: AWS::IAM::InstanceProfile
@@ -169,12 +133,6 @@ Resources:
 # Outputs
 ########################################
 Outputs:
-
-  LambdaPatchRoleArn:
-    Description: ARN of Lambda role for Patch Manager execution
-    Value: !GetAtt LambdaPatchRole.Arn
-    Export:
-      Name: LambdaPatchRoleArn
 
   PatchCommanderRoleArn:
     Description: ARN of Lambda role for Patch Commander (On-Demand)

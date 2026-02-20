@@ -8,13 +8,13 @@ Resources:
   PatchManagerEventRule:
     Type: AWS::Events::Rule
     Properties:
-      Name: StudyEC2WeeklyPatchSchedule
+      Name: ShogiEC2WeeklyPatchSchedule
       Description: Weekly trigger for EC2 Patch Manager Lambda
       ScheduleExpression: 'cron(0 5 ? * SUN *)' # Sunday 05:00 UTC = 14:00 JST
       State: ENABLED
       Targets:
         - Id: PatchCommanderLambda
-          Arn: !ImportValue LambdaPatchFunctionArn
+          Arn: !ImportValue PatchCommanderLambdaArn
 
   #####################################
   # Permission for EventBridge → Lambda
@@ -22,7 +22,7 @@ Resources:
   AllowEventBridgeInvokeLambda:
     Type: AWS::Lambda::Permission
     Properties:
-      FunctionName: !ImportValue LambdaPatchFunctionArn
+      FunctionName: !ImportValue PatchCommanderLambdaArn
       Action: lambda:InvokeFunction
       Principal: events.amazonaws.com
       SourceArn: !GetAtt PatchManagerEventRule.Arn

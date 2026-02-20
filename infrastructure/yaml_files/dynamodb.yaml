@@ -1,16 +1,16 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'DynamoDB StudyRecords Table with TTL, PITR, Full Auto Scaling, Retain Policy and Tags'
+Description: 'DynamoDB ShogiGames Table for game state management'
 
 Resources:
   # =========================
   # DynamoDB Table
   # =========================
-  StudyRecordsTable:
+  ShogiGamesTable:
     Type: AWS::DynamoDB::Table
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      TableName: StudyRecords
+      TableName: ShogiGames
       BillingMode: PROVISIONED
       TableClass: STANDARD
 
@@ -18,43 +18,20 @@ Resources:
         ReadCapacityUnits: 1
         WriteCapacityUnits: 1
 
-      TimeToLiveSpecification:
-        AttributeName: ttl
-        Enabled: true
-
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
 
       AttributeDefinitions:
-        - AttributeName: date
-          AttributeType: S
-        - AttributeName: record_id
-          AttributeType: S
-        - AttributeName: subject
+        - AttributeName: game_id
           AttributeType: S
 
       KeySchema:
-        - AttributeName: date
+        - AttributeName: game_id
           KeyType: HASH
-        - AttributeName: record_id
-          KeyType: RANGE
-
-      GlobalSecondaryIndexes:
-        - IndexName: SubjectDateIndex
-          KeySchema:
-            - AttributeName: subject
-              KeyType: HASH
-            - AttributeName: date
-              KeyType: RANGE
-          Projection:
-            ProjectionType: ALL
-          ProvisionedThroughput:
-            ReadCapacityUnits: 1
-            WriteCapacityUnits: 1
 
       Tags:
         - Key: Project
-          Value: StudyApp
+          Value: ShogiApp
         - Key: Environment
           Value: Personal
 
@@ -95,7 +72,7 @@ Resources:
     Properties:
       MinCapacity: 1
       MaxCapacity: 5
-      ResourceId: !Sub table/${StudyRecordsTable}
+      ResourceId: !Sub table/${ShogiGamesTable}
       RoleARN: !GetAtt DynamoDBAutoScalingRole.Arn
       ScalableDimension: dynamodb:table:WriteCapacityUnits
       ServiceNamespace: dynamodb
@@ -103,7 +80,7 @@ Resources:
   TableWriteScalingPolicy:
     Type: AWS::ApplicationAutoScaling::ScalingPolicy
     Properties:
-      PolicyName: StudyRecordsTableWriteScaling
+      PolicyName: ShogiGamesTableWriteScaling
       PolicyType: TargetTrackingScaling
       ScalingTargetId: !Ref TableWriteScalableTarget
       TargetTrackingScalingPolicyConfiguration:
@@ -122,7 +99,7 @@ Resources:
     Properties:
       MinCapacity: 1
       MaxCapacity: 5
-      ResourceId: !Sub table/${StudyRecordsTable}
+      ResourceId: !Sub table/${ShogiGamesTable}
       RoleARN: !GetAtt DynamoDBAutoScalingRole.Arn
       ScalableDimension: dynamodb:table:ReadCapacityUnits
       ServiceNamespace: dynamodb
@@ -130,63 +107,9 @@ Resources:
   TableReadScalingPolicy:
     Type: AWS::ApplicationAutoScaling::ScalingPolicy
     Properties:
-      PolicyName: StudyRecordsTableReadScaling
+      PolicyName: ShogiGamesTableReadScaling
       PolicyType: TargetTrackingScaling
       ScalingTargetId: !Ref TableReadScalableTarget
-      TargetTrackingScalingPolicyConfiguration:
-        TargetValue: 70.0
-        ScaleOutCooldown: 300
-        ScaleInCooldown: 300
-        DisableScaleIn: false
-        PredefinedMetricSpecification:
-          PredefinedMetricType: DynamoDBReadCapacityUtilization
-
-  # =========================
-  # GSI Write Auto Scaling
-  # =========================
-  GSIWriteScalableTarget:
-    Type: AWS::ApplicationAutoScaling::ScalableTarget
-    Properties:
-      MinCapacity: 1
-      MaxCapacity: 5
-      ResourceId: !Sub table/${StudyRecordsTable}/index/SubjectDateIndex
-      RoleARN: !GetAtt DynamoDBAutoScalingRole.Arn
-      ScalableDimension: dynamodb:index:WriteCapacityUnits
-      ServiceNamespace: dynamodb
-
-  GSIWriteScalingPolicy:
-    Type: AWS::ApplicationAutoScaling::ScalingPolicy
-    Properties:
-      PolicyName: SubjectDateIndexWriteScaling
-      PolicyType: TargetTrackingScaling
-      ScalingTargetId: !Ref GSIWriteScalableTarget
-      TargetTrackingScalingPolicyConfiguration:
-        TargetValue: 70.0
-        ScaleOutCooldown: 300
-        ScaleInCooldown: 300
-        DisableScaleIn: false
-        PredefinedMetricSpecification:
-          PredefinedMetricType: DynamoDBWriteCapacityUtilization
-
-  # =========================
-  # GSI Read Auto Scaling
-  # =========================
-  GSIReadScalableTarget:
-    Type: AWS::ApplicationAutoScaling::ScalableTarget
-    Properties:
-      MinCapacity: 1
-      MaxCapacity: 5
-      ResourceId: !Sub table/${StudyRecordsTable}/index/SubjectDateIndex
-      RoleARN: !GetAtt DynamoDBAutoScalingRole.Arn
-      ScalableDimension: dynamodb:index:ReadCapacityUnits
-      ServiceNamespace: dynamodb
-
-  GSIReadScalingPolicy:
-    Type: AWS::ApplicationAutoScaling::ScalingPolicy
-    Properties:
-      PolicyName: SubjectDateIndexReadScaling
-      PolicyType: TargetTrackingScaling
-      ScalingTargetId: !Ref GSIReadScalableTarget
       TargetTrackingScalingPolicyConfiguration:
         TargetValue: 70.0
         ScaleOutCooldown: 300
@@ -198,9 +121,13 @@ Resources:
 Outputs:
   TableName:
     Description: DynamoDB Table Name
-    Value: !Ref StudyRecordsTable
+    Value: !Ref ShogiGamesTable
+    Export:
+      Name: ShogiGamesTableName
 
   TableArn:
     Description: DynamoDB Table ARN
-    Value: !GetAtt StudyRecordsTable.Arn
+    Value: !GetAtt ShogiGamesTable.Arn
+    Export:
+      Name: ShogiGamesTableArn
 

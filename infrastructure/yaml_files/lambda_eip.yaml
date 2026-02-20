@@ -1,0 +1,365 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Auto-failover system with standby EC2 instance switching'
+
+Parameters:
+  KeyPairName:
+    Type: String
+    Description: EC2 KeyPair for emergency access (normally unused with SSM)
+    Default: ''
+    NoEcho: true
+
+Resources:
+  #####################################
+  # Lambda Function for Failover
+  #####################################
+  FailoverLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: ShogiEC2Failover
+      Runtime: python3.12
+      Handler: index.lambda_handler
+      Timeout: 60
+      Role: !ImportValue LambdaEIPRoleArn
+      Environment:
+        Variables:
+          PRIMARY_INSTANCE_ID: !ImportValue ShogiEC2InstanceId
+          STANDBY_INSTANCE_ID: !Ref StandbyEC2Instance
+          EIP_ALLOCATION_ID: !Ref ServiceEIP
+      Code:
+        ZipFile: |
+          import boto3
+          import os
+          import json
+
+          ec2 = boto3.client('ec2')
+
+          def lambda_handler(event, context):
+              primary_id = os.environ['PRIMARY_INSTANCE_ID']
+              standby_id = os.environ['STANDBY_INSTANCE_ID']
+              allocation_id = os.environ['EIP_ALLOCATION_ID']
+              
+              # CloudWatch Alarmからのイベント処理
+              if 'Records' in event and event['Records'][0].get('EventSource') == 'aws:sns':
+                  message = json.loads(event['Records'][0]['Sns']['Message'])
+                  new_state = message.get('NewStateValue', '')
+                  
+                  # ALARM状態 → 待機系へフェイルオーバー
+                  if new_state == 'ALARM':
+                      return failover_to_standby(primary_id, standby_id, allocation_id)
+                  # OK状態 → 本番系へフェイルバック
+                  elif new_state == 'OK':
+                      return failback_to_primary(primary_id, standby_id, allocation_id)
+                  else:
+                      return {'status': 'NO_ACTION', 'state': new_state}
+              else:
+                  # 手動実行
+                  action = event.get('action', 'failover')
+                  if action == 'failover':
+                      return failover_to_standby(primary_id, standby_id, allocation_id)
+                  elif action == 'failback':
+                      return failback_to_primary(primary_id, standby_id, allocation_id)
+                  else:
+                      return {'status': 'ERROR', 'message': f'Invalid action: {action}'}
+          
+          def failover_to_standby(primary_id, standby_id, allocation_id):
+              """待機系へフェイルオーバー"""
+              try:
+                  # 待機系インスタンスを起動
+                  ec2.start_instances(InstanceIds=[standby_id])
+                  
+                  # 待機系が起動するまで待機
+                  waiter = ec2.get_waiter('instance_running')
+                  waiter.wait(InstanceIds=[standby_id])
+                  
+                  # EIPを待機系に付け替え
+                  response = ec2.associate_address(
+                      InstanceId=standby_id,
+                      AllocationId=allocation_id,
+                      AllowReassociation=True
+                  )
+                  
+                  return {
+                      'status': 'SUCCESS',
+                      'action': 'failover',
+                      'from': primary_id,
+                      'to': standby_id,
+                      'association_id': response['AssociationId'],
+                      'public_ip': get_eip_address(allocation_id)
+                  }
+              except Exception as e:
+                  return {'status': 'ERROR', 'action': 'failover', 'message': str(e)}
+          
+          def failback_to_primary(primary_id, standby_id, allocation_id):
+              """本番系へフェイルバック"""
+              try:
+                  # 本番系の状態確認
+                  instances = ec2.describe_instances(InstanceIds=[primary_id])
+                  state = instances['Reservations'][0]['Instances'][0]['State']['Name']
+                  
+                  # 本番系が停止中なら起動
+                  if state == 'stopped':
+                      ec2.start_instances(InstanceIds=[primary_id])
+                      waiter = ec2.get_waiter('instance_running')
+                      waiter.wait(InstanceIds=[primary_id])
+                  
+                  # EIPを本番系に戻す
+                  response = ec2.associate_address(
+                      InstanceId=primary_id,
+                      AllocationId=allocation_id,
+                      AllowReassociation=True
+                  )
+                  
+                  # 待機系を停止
+                  ec2.stop_instances(InstanceIds=[standby_id])
+                  
+                  return {
+                      'status': 'SUCCESS',
+                      'action': 'failback',
+                      'from': standby_id,
+                      'to': primary_id,
+                      'association_id': response['AssociationId'],
+                      'public_ip': get_eip_address(allocation_id)
+                  }
+              except Exception as e:
+                  return {'status': 'ERROR', 'action': 'failback', 'message': str(e)}
+          
+          def get_eip_address(allocation_id):
+              response = ec2.describe_addresses(AllocationIds=[allocation_id])
+              return response['Addresses'][0]['PublicIp'] if response['Addresses'] else None
+
+  #####################################
+  # SNS Topic for Alarm Notifications
+  #####################################
+  FailoverSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: ShogiEC2FailoverTopic
+      DisplayName: Shogi EC2 Failover Notifications
+      Subscription:
+        - Endpoint: !GetAtt FailoverLambda.Arn
+          Protocol: lambda
+
+  #####################################
+  # Lambda Permission for SNS
+  #####################################
+  AllowSNSInvokeLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref FailoverLambda
+      Action: lambda:InvokeFunction
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref FailoverSNSTopic
+
+  #####################################
+  # CloudWatch Composite Alarm (複数条件)
+  #####################################
+  EC2CompositeAlarm:
+    Type: AWS::CloudWatch::CompositeAlarm
+    Properties:
+      AlarmName: ShogiEC2-CompositeFailover
+      AlarmDescription: Trigger failover when multiple health checks fail
+      ActionsEnabled: true
+      AlarmActions:
+        - !Ref FailoverSNSTopic
+      OKActions:
+        - !Ref FailoverSNSTopic
+      AlarmRule: !Sub '(ALARM(${EC2StatusCheckAlarm}) OR ALARM(${EC2CPUAlarm})) AND ALARM(${EC2NetworkAlarm})'
+
+  #####################################
+  # CloudWatch Alarm 1: Status Check (5分間)
+  #####################################
+  EC2StatusCheckAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: ShogiEC2-StatusCheckFailed
+      AlarmDescription: EC2 status check failed for 5 minutes
+      MetricName: StatusCheckFailed
+      Namespace: AWS/EC2
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 5
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: InstanceId
+          Value: !ImportValue ShogiEC2InstanceId
+      TreatMissingData: notBreaching
+
+  #####################################
+  # CloudWatch Alarm 2: CPU異常 (3分間)
+  #####################################
+  EC2CPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: ShogiEC2-CPUAbnormal
+      AlarmDescription: CPU utilization abnormal (0% or 100%) for 3 minutes
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 0.5
+      ComparisonOperator: LessThanThreshold
+      Dimensions:
+        - Name: InstanceId
+          Value: !ImportValue ShogiEC2InstanceId
+      TreatMissingData: breaching
+
+  #####################################
+  # CloudWatch Alarm 3: Network異常 (3分間)
+  #####################################
+  EC2NetworkAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: ShogiEC2-NetworkOut
+      AlarmDescription: No network output for 3 minutes
+      MetricName: NetworkOut
+      Namespace: AWS/EC2
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 100
+      ComparisonOperator: LessThanThreshold
+      Dimensions:
+        - Name: InstanceId
+          Value: !ImportValue ShogiEC2InstanceId
+      TreatMissingData: breaching
+
+  #####################################
+  # Standby EC2 Instance
+  #####################################
+  StandbyEC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Sub '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2}}'
+      InstanceType: t3.micro
+      SubnetId: !ImportValue ShogiSubnetId
+      SecurityGroupIds:
+        - !ImportValue ShogiSecurityGroupId
+      IamInstanceProfile: !ImportValue EC2InstanceProfileName
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 30
+            VolumeType: gp3
+            Encrypted: true
+            DeleteOnTermination: true
+      Tags:
+        - Key: Name
+          Value: ShogiStandby
+        - Key: Environment
+          Value: Standby
+        - Key: Role
+          Value: Failover
+        - Key: Backup
+          Value: Daily
+        - Key: PatchGroup
+          Value: ShogiEC2PatchGroup
+
+  #####################################
+  # Service EIP (Shared between Primary and Standby)
+  #####################################
+  ServiceEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: ShogiServiceEIP
+        - Key: Purpose
+          Value: FailoverService
+
+  #####################################
+  # Elastic IP for Emergency Access
+  #####################################
+  EmergencyEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: ShogiEmergencyEIP
+        - Key: Purpose
+          Value: EmergencyAccess
+
+  #####################################
+  # CloudWatch Logs
+  #####################################
+  EIPSwitchLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/ShogiEC2Failover
+      RetentionInDays: 14
+
+Outputs:
+  LambdaFunctionName:
+    Description: Lambda function name for failover
+    Value: !Ref FailoverLambda
+    Export:
+      Name: FailoverLambdaName
+
+  LambdaFunctionArn:
+    Description: Lambda function ARN
+    Value: !GetAtt FailoverLambda.Arn
+    Export:
+      Name: FailoverLambdaArn
+
+  StandbyInstanceId:
+    Description: Standby EC2 Instance ID
+    Value: !Ref StandbyEC2Instance
+    Export:
+      Name: ShogiStandbyEC2InstanceId
+
+  ServiceEIPAllocationId:
+    Description: Service EIP Allocation ID
+    Value: !GetAtt ServiceEIP.AllocationId
+    Export:
+      Name: ServiceEIPAllocationId
+
+  ServiceEIPAddress:
+    Description: Service EIP Public IP Address
+    Value: !Ref ServiceEIP
+    Export:
+      Name: ServiceEIPAddress
+
+  SNSTopicArn:
+    Description: SNS Topic ARN for failover notifications
+    Value: !Ref FailoverSNSTopic
+    Export:
+      Name: FailoverSNSTopicArn
+
+  CloudWatchCompositeAlarmName:
+    Description: CloudWatch Composite Alarm name
+    Value: !Ref EC2CompositeAlarm
+    Export:
+      Name: EC2CompositeAlarmName
+
+  CloudWatchStatusCheckAlarmName:
+    Description: CloudWatch Status Check Alarm name
+    Value: !Ref EC2StatusCheckAlarm
+    Export:
+      Name: EC2StatusCheckAlarmName
+
+  CloudWatchCPUAlarmName:
+    Description: CloudWatch CPU Alarm name
+    Value: !Ref EC2CPUAlarm
+    Export:
+      Name: EC2CPUAlarmName
+
+  CloudWatchNetworkAlarmName:
+    Description: CloudWatch Network Alarm name
+    Value: !Ref EC2NetworkAlarm
+    Export:
+      Name: EC2NetworkAlarmName
+
+  EmergencyEIPAllocationId:
+    Description: Emergency EIP Allocation ID
+    Value: !GetAtt EmergencyEIP.AllocationId
+    Export:
+      Name: EmergencyEIPAllocationId
+
+  EmergencyEIPAddress:
+    Description: Emergency EIP Public IP Address
+    Value: !Ref EmergencyEIP
+    Export:
+      Name: EmergencyEIPAddress

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import "./App.css";
-import { fetchGameState, fetchLegalMoves, postMove, resetGame } from "./api/gameApi";
+import { fetchGameState, fetchLegalMoves, postMove, resetGame, undoMove } from "./api/gameApi";
 import { EMPTY, initialBoard } from "./constants/gameConstants";
 import { computeDropTargets, getPieceImageSrc, handCounts, sideLabel } from "./utils/gameHelpers";
 
@@ -148,6 +148,21 @@ function App() {
     clearSelection();
   };
 
+  // 1手前へ戻す（待った）。
+  const handleUndo = async () => {
+    setErrorMessage("");
+    const result = await undoMove();
+    if (!result.ok) {
+      setErrorMessage(result.data.message || result.data.error || "待ったに失敗しました。");
+      return;
+    }
+    applyServerState(result.data);
+    setSelectedHandPiece(null);
+    setDropTargets([]);
+    setPendingPromotion(null);
+    clearSelection();
+  };
+
   // マスクリック時の選択・着手・駒打ちを制御する。
   const handleClick = async (row, col) => {
     if (gameStatus.state === "ended" || pendingPromotion) return;
@@ -226,6 +241,9 @@ function App() {
       <h1>将棋</h1>
       <div className="status-strip">
         <p className="status-line">手番: {sideLabel(sideToMove)}</p>
+        <button type="button" className="undo-btn" onClick={handleUndo}>
+          待った
+        </button>
         <button type="button" className="reset-btn" onClick={handleReset}>
           リセット
         </button>

@@ -24,5 +24,13 @@ export const postMove = (payload) =>
     body: JSON.stringify(payload),
   });
 
+// 1手前へ戻す（待った）。
+export const undoMove = () =>
+  requestJson("/api/undo", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+
 // 対局状態をリセットする。
 export const resetGame = () => requestJson("/api/reset", { method: "POST" });

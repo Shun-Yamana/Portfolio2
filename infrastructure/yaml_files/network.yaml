@@ -1,9 +1,9 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Network Resources for Study Application'
+Description: 'Network Resources for Shogi Application'
 
 Resources:
   # VPC Configuration
-  StudyVPC:
+  ShogiVPC:
     Type: AWS::EC2::VPC
     Properties:
       CidrBlock: 10.0.0.0/16
@@ -11,18 +11,18 @@ Resources:
       EnableDnsSupport: true
       Tags:
         - Key: Name
-          Value: StudyVPC
+          Value: ShogiVPC
 
-  StudySubnet:
+  ShogiSubnet:
     Type: AWS::EC2::Subnet
     Properties:
-      VpcId: !Ref StudyVPC
+      VpcId: !Ref ShogiVPC
       CidrBlock: 10.0.1.0/24
       AvailabilityZone: !Select [0, !GetAZs '']
       MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
-          Value: StudySubnet
+          Value: ShogiSubnet
 
   # Internet Gateway
   InternetGateway:
@@ -30,19 +30,19 @@ Resources:
     Properties:
       Tags:
         - Key: Name
-          Value: StudyIGW
+          Value: ShogiIGW
 
   AttachGateway:
     Type: AWS::EC2::VPCGatewayAttachment
     Properties:
-      VpcId: !Ref StudyVPC
+      VpcId: !Ref ShogiVPC
       InternetGatewayId: !Ref InternetGateway
 
   # Public Subnet for NAT Gateway
   PublicSubnet:
     Type: AWS::EC2::Subnet
     Properties:
-      VpcId: !Ref StudyVPC
+      VpcId: !Ref ShogiVPC
       CidrBlock: 10.0.2.0/24
       AvailabilityZone: !Select [0, !GetAZs '']
       MapPublicIpOnLaunch: true
@@ -68,13 +68,13 @@ Resources:
       SubnetId: !Ref PublicSubnet
       Tags:
         - Key: Name
-          Value: StudyNATGateway
+          Value: ShogiNATGateway
 
   # Public Route Table
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
-      VpcId: !Ref StudyVPC
+      VpcId: !Ref ShogiVPC
       Tags:
         - Key: Name
           Value: PublicRouteTable
@@ -97,7 +97,7 @@ Resources:
   PrivateRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
-      VpcId: !Ref StudyVPC
+      VpcId: !Ref ShogiVPC
       Tags:
         - Key: Name
           Value: PrivateRouteTable
@@ -112,16 +112,16 @@ Resources:
   PrivateSubnetRouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
-      SubnetId: !Ref StudySubnet
+      SubnetId: !Ref ShogiSubnet
       RouteTableId: !Ref PrivateRouteTable
 
   # Security Group for EC2
-  StudySecurityGroup:
+  ShogiSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupName: StudySecurityGroup
-      GroupDescription: Security group for study EC2 instance via SSM endpoints
-      VpcId: !Ref StudyVPC
+      GroupName: ShogiSecurityGroup
+      GroupDescription: Security group for shogi EC2 instance via SSM endpoints
+      VpcId: !Ref ShogiVPC
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 443
@@ -130,7 +130,7 @@ Resources:
           Description: HTTPS for SSM from VPC
       Tags:
         - Key: Name
-          Value: StudySecurityGroup
+          Value: ShogiSecurityGroup
 
   # Security Group for VPC Endpoints
   VPCEndpointSecurityGroup:
@@ -138,7 +138,7 @@ Resources:
     Properties:
       GroupName: VPCEndpointSecurityGroup
       GroupDescription: Security group for VPC endpoints
-      VpcId: !Ref StudyVPC
+      VpcId: !Ref ShogiVPC
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 443
@@ -153,12 +153,12 @@ Resources:
   SSMEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
-      VpcId: !Ref StudyVPC
+      VpcId: !Ref ShogiVPC
       ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ssm'
       VpcEndpointType: Interface
       PrivateDnsEnabled: true
       SubnetIds:
-        - !Ref StudySubnet
+        - !Ref ShogiSubnet
       SecurityGroupIds:
         - !Ref VPCEndpointSecurityGroup
       Tags:
@@ -169,12 +169,12 @@ Resources:
   SSMMessagesEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
-      VpcId: !Ref StudyVPC
+      VpcId: !Ref ShogiVPC
       ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ssmmessages'
       VpcEndpointType: Interface
       PrivateDnsEnabled: true
       SubnetIds:
-        - !Ref StudySubnet
+        - !Ref ShogiSubnet
       SecurityGroupIds:
         - !Ref VPCEndpointSecurityGroup
       Tags:
@@ -185,12 +185,12 @@ Resources:
   EC2MessagesEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
-      VpcId: !Ref StudyVPC
+      VpcId: !Ref ShogiVPC
       ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ec2messages'
       VpcEndpointType: Interface
       PrivateDnsEnabled: true
       SubnetIds:
-        - !Ref StudySubnet
+        - !Ref ShogiSubnet
       SecurityGroupIds:
         - !Ref VPCEndpointSecurityGroup
       Tags:
@@ -201,7 +201,7 @@ Resources:
   S3Endpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
-      VpcId: !Ref StudyVPC
+      VpcId: !Ref ShogiVPC
       ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
       VpcEndpointType: Gateway
       RouteTableIds:
@@ -210,18 +210,18 @@ Resources:
 Outputs:
   VPCId:
     Description: VPC ID
-    Value: !Ref StudyVPC
+    Value: !Ref ShogiVPC
     Export:
-      Name: StudyVPCId
+      Name: ShogiVPCId
 
   SubnetId:
     Description: Subnet ID
-    Value: !Ref StudySubnet
+    Value: !Ref ShogiSubnet
     Export:
-      Name: StudySubnetId
+      Name: ShogiSubnetId
 
   SecurityGroupId:
     Description: Security Group ID
-    Value: !Ref StudySecurityGroup
+    Value: !Ref ShogiSecurityGroup
     Export:
-      Name: StudySecurityGroupId
+      Name: ShogiSecurityGroupId

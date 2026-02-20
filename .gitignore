@@ -35,8 +35,6 @@ Thumbs.db
 # Build artifacts
 *.deb
 *.drawio
-*.drawio.bkp
-
-# Security - Private keys
+*.drawio.bkp# Security - Private keys
 *.pem
 *.key

@@ -123,7 +123,100 @@ python -m backend.api.app
 
 `previous_state` がない場合は `400` で `No move to undo.` を返します。
 
-## デプロイ用 ZIP
+## AWS インフラ構成
+
+CloudFormation で管理する完全サーバーレス対応の本番インフラです。
+
+### アーキテクチャ概要
+
+```
+Internet
+   │
+   ▼
+[Elastic IP] ← Lambda Failover が切り替え
+   │
+   ├─ Primary EC2 (t3.micro, Private Subnet)
+   └─ Standby EC2 (t3.micro, Private Subnet, 通常停止中)
+          │
+          ▼
+     [DynamoDB: ShogiGames]
+          │
+     [S3: shogi-app-packages-{AccountId}]
+```
+
+- EC2 は **プライベートサブネット**に配置し、パブリック IP なし
+- 管理アクセスはすべて **SSM Session Manager** 経由（SSH ポート不要）
+- NAT Gateway 経由でアウトバウンド通信
+- SSM / S3 / DynamoDB は VPC Endpoint 経由（インターネット非経由）
+
+### CloudFormation スタック一覧・デプロイ順序
+
+| 順序 | ファイル | 説明 |
+|------|----------|------|
+| 1 | `network.yaml` | VPC / サブネット / IGW / NAT GW / SG / VPC Endpoints |
+| 2 | `iam.yaml` | 各サービス用 IAM ロール / インスタンスプロファイル |
+| 3 | `s3.yaml` | Python パッケージ配布用 S3 バケット |
+| 4 | `dynamodb.yaml` | ゲーム状態管理 DynamoDB テーブル |
+| 5 | `ec2.yaml` | Primary EC2 / SSM Patch Baseline / DLM スナップショット |
+| 6 | `lambda_patch.yaml` | パッチ適用 Lambda（本番用・Install） |
+| 7 | `lambda_patch_test.yaml` | パッチスキャン Lambda（テスト用・Scan のみ） |
+| 8 | `eventbridge.yaml` | 週次パッチスケジュール（毎週日曜 14:00 JST） |
+| 9 | `lambda_eip.yaml` | 自動フェイルオーバー一式（Standby EC2 / EIP / CloudWatch Alarm） |
+
+### 各スタック詳細
+
+#### network.yaml
+- VPC: `10.0.0.0/16`（DNS ホスト名有効）
+- Private Subnet: `10.0.1.0/24`（EC2 配置先、パブリック IP なし）
+- Public Subnet: `10.0.2.0/24`（NAT Gateway 配置先）
+- VPC Interface Endpoints: `ssm` / `ssmmessages` / `ec2messages`（SSM 通信のインターネット非経由化）
+- VPC Gateway Endpoint: `s3`（S3 アクセスのインターネット非経由化）
+- Security Group: VPC 内からの HTTPS (443) のみ許可
+
+#### iam.yaml
+| ロール | 用途 |
+|--------|------|
+| `EC2-SSM-ManagedRole` | EC2 用。SSM マネージド + S3 読み取り + DynamoDB CRUD |
+| `PatchCommanderLambdaRole` | パッチ Lambda 用。EC2 Describe + SSM SendCommand |
+| `Lambda-EIP-Switch-Role` | フェイルオーバー Lambda 用。EC2 EIP 操作 + インスタンス起動停止 |
+| `DLM-EC2-Snapshot-Role` | EBS スナップショット自動管理用 |
+
+#### s3.yaml
+- バケット名: `shogi-app-packages-{AccountId}`
+- パブリックアクセス完全ブロック、バージョニング有効、AES-256 暗号化
+- EC2 上へのアプリデプロイ（ZIP パッケージ）に使用
+
+#### dynamodb.yaml
+- テーブル名: `ShogiGames`、パーティションキー: `game_id`（String）
+- プロビジョンドキャパシティ（1 RCU/WCU）+ Auto Scaling（1〜5、使用率 70% で拡張）
+- PITR（ポイントインタイムリカバリ）有効、`DeletionPolicy: Retain`
+
+#### ec2.yaml
+- AMI: Amazon Linux 2（SSM パラメータストアから最新版を自動取得）
+- インスタンスタイプ: t3.micro、ルートボリューム: gp3 / 30 GiB / 暗号化
+- **SSM Patch Baseline**: Security・Bugfix カテゴリの Critical/Important パッチを 7 日後に自動承認（カーネルパッチは除外）
+- **DLM スナップショット**: 毎日 03:00 JST にスナップショット取得、7 世代保持
+
+#### lambda_patch.yaml / lambda_patch_test.yaml
+- `PatchCommander`（本番）: `AWS-RunPatchBaseline` を `Install` モードで実行。パッチ適用後に必要に応じて再起動。
+- `PatchCommanderScan`（テスト）: `Scan` モードのみ。実際の適用・再起動なし。
+
+#### eventbridge.yaml
+- EventBridge ルール: 毎週日曜 14:00 JST に `PatchCommander` Lambda を起動
+- `ShogiEC2PatchGroup` タグを持つ実行中 EC2 を自動検出して実行
+
+#### lambda_eip.yaml（自動フェイルオーバー）
+- **Standby EC2**: 通常は停止状態で待機。フェイルオーバー時に自動起動。
+- **Service EIP**: Primary / Standby 間で共有する固定 IP。Lambda が付け替えることでフェイルオーバー。
+- **Emergency EIP**: 緊急時の直接アクセス用。
+- **CloudWatch Composite Alarm**: 以下の条件が揃った場合にアラーム発火
+  - `(StatusCheck 5 分間失敗 OR CPU 0% 以下が 3 分間) AND NetworkOut 0 が 3 分間`
+- **フロー**:
+  1. CloudWatch Alarm → SNS → Lambda 起動
+  2. `ALARM`: Standby 起動 → EIP を Standby に付け替え（フェイルオーバー）
+  3. `OK`: Primary 起動 → EIP を Primary に戻し、Standby 停止（フェイルバック）
+
+### デプロイ用 ZIP
 
 バックエンド ZIP は以下に生成済みです。
 
